@@ -5,7 +5,7 @@ export function listHost() {
 }
 
 export function registerHost(hostData) {
-  return api.post('/hosts', hostData);
+  return api.post('/hosts/', hostData);
 }
 
 export function getHostStatus(hostId) {
