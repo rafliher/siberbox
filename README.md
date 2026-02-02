@@ -23,7 +23,7 @@ SiberBox is a comprehensive platform that enables educators and security profess
 ```
 ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
 │   Web Interface     │    │  Machine Lab        │    │  Container Host     │
-│     (Optional)      │◄──►│    Manager          │◄──►│     Agents          │
+│                     │◄──►│    Manager          │◄──►│     Agents          │
 │                     │    │                     │    │                     │
 │  - Dashboard        │    │  - API Server       │    │  - Docker Engine    │
 │  - Container Mgmt   │    │  - VPN Server       │    │  - Container Mgmt   │
@@ -115,7 +115,7 @@ The Machine Lab Manager API is designed to be integrated with larger educational
 machine-lab-platform/
 ├── machine-lab-manager/      # Central management server
 ├── container-host-agent/     # Distributed container agents  
-├── machine-lab-platform-ui/  # Web interface (optional)
+├── machine-lab-platform-ui/  # Web interface 
 ├── docs/                     # Documentation and diagrams
 └── example/                  # Example challenges and setups
 ```

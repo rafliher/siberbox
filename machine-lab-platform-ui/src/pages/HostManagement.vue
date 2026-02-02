@@ -3,59 +3,180 @@
     <div v-if="isLoading" class="loading-overlay">
       <div class="spinner"></div>
     </div>
-    <div class="host-management">
-      <div class="header">
-        <h2>Manajemen Host</h2>
-        <button class="add-button" @click="showAddHostModal = true">+ Tambah Host</button>
+    
+    <div class="dashboard">
+      <div class="dashboard-header">
+        <div>
+          <h1>Host Management</h1>
+          <p>Monitor and manage container host machines</p>
+        </div>
+        <button @click="showAddHostModal = true" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          Add Host
+        </button>
       </div>
-      <div class="search-section">
-        <input v-model="searchQuery" placeholder="Nama Hosts" class="input-name" />
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon healthy">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">Healthy Hosts</p>
+            <p class="stat-value">{{ healthyCount }}</p>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon offline">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">Offline Hosts</p>
+            <p class="stat-value">{{ offlineCount }}</p>
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-icon total">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </div>
+          <div class="stat-content">
+            <p class="stat-label">Total Hosts</p>
+            <p class="stat-value">{{ hosts.length }}</p>
+          </div>
+        </div>
       </div>
-      <table class="host-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Nama Host</th>
-            <th>IP Address</th>
-            <th>Status</th>
-            <th>Memory Usage</th>
-            <th>Waktu Deploy</th>
-            <th>Aksi</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="host in filteredHosts" :key="host.id">
-            <td>{{ host.id }}</td>
-            <td>{{ host.hostname }}</td>
-            <td>{{ host.ip }}</td>
-            <td :class="host.status">{{ host.status }}</td>
-            <td>
-              <div class="usage-bar">
-                <div class="usage-fill" :style="{ width: host.mem_percent + '%' }"></div>
-              </div>
-              <small>{{ host.mem_percent }}%</small>
-            </td>
-            <td>{{ formatTime(host.last_seen) }}</td>
-            <td class="actions">
-              <button class="edit" @click="editHost(host)">
-                <i class="fa fa-edit"></i>
-              </button>
-              <button class="delete" @click="deleteHost(host.id)">
-                <i class="fa fa-trash"></i>
-              </button>
-              <button class="monitor">
-                <i class="fa fa-chart-bar"></i>
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Registered Hosts</h3>
+          <div class="search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input 
+              v-model="searchQuery" 
+              placeholder="Search hosts..." 
+              class="search-input"
+            />
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>IP Address</th>
+                <th>Status</th>
+                <th>Resource Usage</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="host in filteredHosts" :key="host.id">
+                <td>
+                  <div class="hostname-cell">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="2" y="3" width="20" height="14" rx="2"/>
+                      <line x1="8" y1="21" x2="16" y2="21"/>
+                      <line x1="12" y1="17" x2="12" y2="21"/>
+                    </svg>
+                    <span>{{ host.hostname }}</span>
+                  </div>
+                </td>
+                <td>
+                  <code class="ip-address">{{ host.ip }}</code>
+                </td>
+                <td>
+                  <span 
+                    :class="['status', host.status === 'healthy' ? 'status-success' : 'status-error']"
+                  >
+                    {{ host.status }}
+                  </span>
+                </td>
+                <td>
+                  <div class="resource-usage">
+                    <div class="resource-item">
+                      <span class="resource-label">CPU</span>
+                      <div class="progress-bar">
+                        <div 
+                          class="progress-fill" 
+                          :style="{ width: host.cpu_percent + '%', background: getResourceColor(host.cpu_percent) }"
+                        ></div>
+                      </div>
+                      <span class="resource-value">{{ host.cpu_percent }}%</span>
+                    </div>
+                    <div class="resource-item">
+                      <span class="resource-label">MEM</span>
+                      <div class="progress-bar">
+                        <div 
+                          class="progress-fill" 
+                          :style="{ width: host.mem_percent + '%', background: getResourceColor(host.mem_percent) }"
+                        ></div>
+                      </div>
+                      <span class="resource-value">{{ host.mem_percent }}%</span>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <span class="timestamp">{{ formatTime(host.last_seen) }}</span>
+                </td>
+                <td>
+                  <div class="action-buttons">
+                    <button @click="editHost(host)" class="btn-icon btn-ghost" title="Edit">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </button>
+                    <button @click="deleteHost(host.id)" class="btn-icon btn-ghost" title="Delete">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="filteredHosts.length === 0">
+                <td colspan="6" class="empty-state">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2" y="3" width="20" height="14" rx="2"/>
+                    <line x1="8" y1="21" x2="16" y2="21"/>
+                    <line x1="12" y1="17" x2="12" y2="21"/>
+                  </svg>
+                  <p>No hosts found</p>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <HostForm
         v-if="showAddHostModal"
         :key="'add-host-form'"
         @add-host="handleAddHost"
         @close="showAddHostModal = false"
       />
+      
       <HostForm
         v-if="showEditHostModal"
         :key="'edit-host-form'"
@@ -64,24 +185,52 @@
         @edit-host="handleEditHost"
         @close="showEditHostModal = false"
       />
-    </div>
-    <div v-if="showCredentialModal" class="modal-credential-overlay">
-      <div class="modal-credential-content">
-        <h3 class="modal-title">Host Ditambahkan</h3>
-        <p><strong>Host ID:</strong></p>
-        <div class="code-box">{{ newHostCredentials.host_id }}</div>
-        <p><strong>Server Key:</strong></p>
-        <div class="code-box">{{ newHostCredentials.server_key }}</div>
-        <button class="close-button" @click="showCredentialModal = false">Tutup</button>
+      
+      <div v-if="showCredentialModal" class="modal-overlay">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Host Registered Successfully</h3>
+            <p>Save these credentials securely. They won't be shown again.</p>
+          </div>
+          
+          <div class="credential-section">
+            <label>Host ID</label>
+            <div class="credential-box">
+              <code>{{ newHostCredentials.host_id }}</code>
+              <button @click="copyToClipboard(newHostCredentials.host_id)" class="copy-btn" title="Copy">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <div class="credential-section">
+            <label>Server Key</label>
+            <div class="credential-box">
+              <code class="credential-key">{{ newHostCredentials.server_key }}</code>
+              <button @click="copyToClipboard(newHostCredentials.server_key)" class="copy-btn" title="Copy">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          
+          <button @click="showCredentialModal = false" class="btn btn-primary" style="width: 100%">
+            Done
+          </button>
+        </div>
       </div>
     </div>
   </MainLayout>
 </template>
 
 <script>
-import { listHost, deleteHost } from '../services/apiHostService';
+import { listHost, deleteHost, registerHost, updateHost } from '../services/apiHostService';
 import HostForm from '../components/HostForm.vue';
-import { registerHost, updateHost } from '../services/apiHostService';
 import { useToast } from 'vue-toastification';
 import MainLayout from '../layouts/MainLayout.vue';
 import dayjs from 'dayjs';
@@ -111,11 +260,17 @@ export default {
   computed: {
     filteredHosts() {
       const q = this.searchQuery.toLowerCase();
-      return this.hosts.filter(c =>
-        c.hostname.toLowerCase().includes(q) ||
-        c.ip.toLowerCase().includes(q) ||
-        c.status.toLowerCase().includes(q)
+      return this.hosts.filter(h =>
+        h.hostname.toLowerCase().includes(q) ||
+        h.ip.toLowerCase().includes(q) ||
+        h.status.toLowerCase().includes(q)
       );
+    },
+    healthyCount() {
+      return this.hosts.filter(h => h.status === 'healthy').length;
+    },
+    offlineCount() {
+      return this.hosts.filter(h => h.status === 'offline').length;
     }
   },
   methods: {
@@ -124,12 +279,18 @@ export default {
         const response = await listHost();
         this.hosts = response.data;
       } catch (error) {
-        console.error('Gagal mengambil data host:', error);
-        this.toast.error('Gagal memuat data host');
+        console.error('Failed to fetch hosts:', error);
+        this.toast.error('Failed to load hosts');
       }
     },
     formatTime(timeString) {
-      return dayjs(timeString).format('YYYY-MM-DD HH:mm');
+      if (!timeString) return 'Never';
+      return dayjs(timeString).format('MMM D, YYYY HH:mm');
+    },
+    getResourceColor(percent) {
+      if (percent >= 90) return 'var(--color-error)';
+      if (percent >= 75) return 'var(--color-warning)';
+      return 'var(--color-success)';
     },
     async handleAddHost(data) {
       if (this.loading) return;
@@ -143,11 +304,11 @@ export default {
         };
         this.showCredentialModal = true;
         this.fetchHosts();
-        this.toast.success('Host berhasil ditambahkan');
+        this.toast.success('Host registered successfully');
         this.showAddHostModal = false;
       } catch (error) {
-        console.error('Gagal menambahkan host:', error);
-        this.toast.error('Gagal menambahkan host');
+        console.error('Failed to add host:', error);
+        this.toast.error('Failed to register host');
       } finally {
         this.isLoading = false;
       }
@@ -158,12 +319,12 @@ export default {
       try {
         await updateHost(this.selectedHost.id, data);
         this.fetchHosts();
-        this.toast.success('Host berhasil diperbarui');
+        this.toast.success('Host updated successfully');
         this.showEditHostModal = false;
         this.selectedHost = null;
       } catch (error) {
-        console.error('Gagal mengedit host:', error);
-        this.toast.error('Gagal memperbarui host');
+        console.error('Failed to edit host:', error);
+        this.toast.error('Failed to update host');
       } finally {
         this.isLoading = false;
       }
@@ -173,18 +334,25 @@ export default {
       this.showEditHostModal = true;
     },
     async deleteHost(id) {
-      if (confirm('Yakin ingin menghapus host ini?')) {
-        this.isLoading = true;
-        try {
-          await deleteHost(id);
-          this.fetchHosts();
-          this.toast.success('Host berhasil dihapus');
-        } catch (error) {
-          console.error('Gagal menghapus host:', error);
-          this.toast.error('Gagal menghapus host');
-        } finally {
-          this.isLoading = false;
-        }
+      if (!confirm('Are you sure you want to delete this host?')) return;
+      this.isLoading = true;
+      try {
+        await deleteHost(id);
+        this.fetchHosts();
+        this.toast.success('Host deleted successfully');
+      } catch (error) {
+        console.error('Failed to delete host:', error);
+        this.toast.error('Failed to delete host');
+      } finally {
+        this.isLoading = false;
+      }
+    },
+    async copyToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.toast.success('Copied to clipboard');
+      } catch (err) {
+        this.toast.error('Failed to copy');
       }
     }
   },
@@ -195,202 +363,319 @@ export default {
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-
-.host-management {
-  background: rgba(20, 20, 30, 0.95);
-  padding: 2em;
-  border-radius: 12px;
-  font-family: 'Share Tech Mono', monospace;
-  color: #f5f5f5;
+.dashboard {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--space-2xl) var(--space-lg);
 }
 
-.header {
+.dashboard-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 1em;
+  justify-content: space-between;
+  margin-bottom: var(--space-2xl);
 }
 
-.header h2 {
-  font-size: 1.5rem;
-  color: #ff3d3d;
+.dashboard-header h1 {
+  font-size: 2rem;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-xs);
 }
 
-.add-button {
-  background-color: #ff3d3d;
-  color: #f5f5f5;
-  border: none;
-  padding: 0.5em 1em;
-  border-radius: 8px;
-  font-size: 14px;
-  cursor: pointer;
-  text-transform: uppercase;
-  transition: box-shadow 0.2s, transform 0.2s;
+.dashboard-header p {
+  color: var(--color-text-secondary);
+  font-size: 0.9375rem;
 }
 
-.add-button:hover {
-  box-shadow: 0px 0px 15px #ff3d3d80;
-  transform: translateY(-2px);
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--space-lg);
+  margin-bottom: var(--space-2xl);
 }
 
-.host-table {
-  margin-top: 1em;
-  width: 100%;
-  border-collapse: collapse;
-  background: #111;
-  border-radius: 12px;
-  overflow: hidden;
+.stat-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  transition: border-color var(--transition-fast);
 }
 
-.host-table th,
-.host-table td {
-  padding: 0.75em 1em;
-  text-align: left;
-  border-bottom: 1px solid #ff3d3d30;
+.stat-card:hover {
+  border-color: var(--color-border-hover);
 }
 
-.host-table th {
-  background-color: #222;
-  color: #ff3d3d;
-  text-transform: uppercase;
-}
-
-.healthy {
-  color: #00ff00;
-  font-weight: bold;
-}
-
-.unhealthy {
-  color: #ff3d3d;
-  font-weight: bold;
-}
-
-.usage-bar {
-  height: 8px;
-  width: 100%;
-  background: #333;
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 4px;
-}
-
-.usage-fill {
-  height: 100%;
-  background: #ff3d3d;
-  transition: width 0.3s ease;
-}
-
-.actions button {
-  margin-right: 0.5em;
-  background: none;
-  border: none;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0.25em 0.5em;
-  border-radius: 6px;
-  color: #f5f5f5;
-  transition: color 0.2s, box-shadow 0.2s;
-}
-
-.actions button:hover {
-  color: #ff3d3d;
-}
-
-.loading-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(20, 20, 30, 0.7);
+.stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 999;
+  flex-shrink: 0;
 }
 
-.spinner {
-  border: 6px solid #ccc;
-  border-top: 6px solid #ff3d3d;
-  border-radius: 50%;
-  width: 50px;
-  height: 50px;
-  animation: spin 1s linear infinite;
+.stat-icon.healthy {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--color-success);
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+.stat-icon.offline {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-error);
+}
+
+.stat-icon.total {
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--color-primary);
+}
+
+.stat-content {
+  flex: 1;
+}
+
+.stat-label {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.stat-value {
+  font-size: 1.875rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-lg);
+  padding-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-lg);
+}
+
+.card-header h3 {
+  font-size: 1.25rem;
+  color: var(--color-text-primary);
+}
+
+.search-box {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+}
+
+.search-box svg {
+  position: absolute;
+  left: 0.875rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.625rem 0.875rem 0.625rem 2.5rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+  transition: all var(--transition-fast);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-glow);
+}
+
+.hostname-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.hostname-cell svg {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.ip-address {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+
+.resource-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 180px;
+}
+
+.resource-item {
+  display: grid;
+  grid-template-columns: 32px 1fr 45px;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.resource-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--color-bg-elevated);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  transition: width var(--transition-normal);
+  border-radius: 3px;
+}
+
+.resource-value {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-align: right;
+}
+
+.timestamp {
+  font-size: 0.8125rem;
+  color: var(--color-text-tertiary);
+}
+
+.action-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-lg);
+  color: var(--color-text-tertiary);
+}
+
+.empty-state svg {
+  margin-bottom: var(--space-md);
+  opacity: 0.5;
+}
+
+.empty-state p {
+  font-size: 0.9375rem;
+}
+
+.modal-header {
+  margin-bottom: var(--space-2xl);
+}
+
+.modal-header h3 {
+  font-size: 1.5rem;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-xs);
+}
+
+.modal-header p {
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.credential-section {
+  margin-bottom: var(--space-lg);
+}
+
+.credential-section label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-sm);
+}
+
+.credential-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.875rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.credential-box code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.credential-key {
+  color: var(--color-success) !important;
+}
+
+.copy-btn {
+  padding: 0.5rem;
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.copy-btn:hover {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .dashboard-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-lg);
+  }
+  
+  .dashboard-header button {
+    width: 100%;
+  }
+  
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .search-box {
+    max-width: 100%;
+  }
+  
+  .resource-usage {
+    min-width: auto;
   }
 }
-
-.modal-credential-overlay {
-  position: fixed;
-  top: 0; left: 0;
-  width: 100vw;
-  height: 100vh;
-  background: rgba(10, 10, 20, 0.9);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-
-.modal-credential-content {
-  background: #1c1c2b;
-  border: 1px solid #ff3d3d60;
-  padding: 2em;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 500px;
-  font-family: 'Share Tech Mono', monospace;
-  color: #f5f5f5;
-  text-align: center;
-  box-shadow: 0px 0px 20px #ff3d3d40;
-}
-
-.modal-title {
-  color: #ff3d3d;
-  margin-bottom: 1em;
-  font-size: 1.3rem;
-}
-
-.input-name {
-  padding: 0.5em;
-  border-radius: 8px;
-  border: 1px solid #ff3d3d;
-  min-width: 180px;
-  background: #222;
-  color: #f5f5f5;
-}
-
-.code-box {
-  background-color: #111;
-  border: 1px solid #ff3d3d50;
-  padding: 0.75em;
-  margin: 0.5em 0 1em;
-  border-radius: 8px;
-  word-break: break-all;
-  color: #00ff88;
-}
-
-.close-button {
-  margin-top: 1em;
-  background-color: #ff3d3d;
-  color: #f5f5f5;
-  border: none;
-  padding: 0.5em 1.5em;
-  border-radius: 8px;
-  font-size: 14px;
-  cursor: pointer;
-  text-transform: uppercase;
-  transition: background 0.2s, transform 0.2s;
-}
-
-.close-button:hover {
-  background-color: #e62e2e;
-  transform: scale(1.05);
-}
-
 </style>

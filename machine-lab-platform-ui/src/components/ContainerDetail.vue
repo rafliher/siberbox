@@ -1,53 +1,95 @@
 <template>
-  <div class="modal-overlay">
-    <div class="modal-box">
-      <h3 class="modal-title">Detail Container</h3>
+  <div class="modal-overlay" @click.self="$emit('close')">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Container Details</h3>
+        <button @click="$emit('close')" class="close-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
 
       <div class="detail-grid">
-        <div class="detail-row">
-          <span class="label">ID:</span>
-          <span class="value">{{ detail.id }}</span>
+        <div class="detail-item">
+          <span class="detail-label">Container ID</span>
+          <code class="detail-value">{{ detail.id }}</code>
         </div>
-        <div class="detail-row">
-          <span class="label">Nama:</span>
-          <span class="value">{{ detail.name }}</span>
+        
+        <div class="detail-item">
+          <span class="detail-label">Name</span>
+          <span class="detail-value">{{ detail.name }}</span>
         </div>
-        <div class="detail-row">
-          <span class="label">Host ID:</span>
-          <span class="value">{{ detail.host_id }}</span>
+        
+        <div class="detail-item">
+          <span class="detail-label">Status</span>
+          <span 
+            :class="['status', detail.status === 'running' ? 'status-success' : 'status-error']"
+          >
+            {{ detail.status }}
+          </span>
         </div>
-        <div class="actions" :style="{marginTop: '0'}">
-          <button class="btn-vpn" :disabled="downloading" @click="downloadVpn()">
-            {{ downloading ? 'Downloading…' : 'Download User VPN Profile' }}
-          </button>
-          <button class="btn-vpn" :disabled="rotating" @click="rotateVpn()">
-            {{ rotating ? 'Rotating…' : 'Rotate User VPN Profile' }}
-          </button>
+        
+        <div class="detail-item">
+          <span class="detail-label">IP Address</span>
+          <code class="detail-value ip-address">{{ detail.ip_address }}</code>
         </div>
-        <div class="detail-row">
-          <span class="label">User ID:</span>
-          <span class="value">{{ detail.user_id }}</span>
+        
+        <div class="detail-item">
+          <span class="detail-label">User ID</span>
+          <code class="detail-value">{{ detail.user_id }}</code>
         </div>
-        <div class="detail-row">
-          <span class="label">Status:</span>
-          <span class="value" :class="detail.status">{{ detail.status }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="label">IP Address:</span>
-          <span class="value">{{ detail.ip_address }}</span>
+        
+        <div class="detail-item">
+          <span class="detail-label">Host ID</span>
+          <code class="detail-value">{{ detail.host_id }}</code>
         </div>
       </div>
 
-      <div class="actions">
-        <button @click="$emit('close')" class="btn-close">Tutup</button>
+      <div class="vpn-section">
+        <h4>VPN Configuration</h4>
+        <p class="vpn-hint">Manage VPN profile for this user's container access</p>
+        
+        <div class="vpn-actions">
+          <button 
+            @click="downloadVpn()" 
+            :disabled="downloading" 
+            class="btn btn-secondary"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            {{ downloading ? 'Downloading...' : 'Download VPN Profile' }}
+          </button>
+          
+          <button 
+            @click="rotateVpn()" 
+            :disabled="rotating" 
+            class="btn btn-secondary"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            {{ rotating ? 'Rotating...' : 'Rotate VPN Profile' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button @click="$emit('close')" class="btn btn-primary">Close</button>
       </div>
     </div>
   </div>
 </template>
 
 <script>
-import { saveAs } from 'file-saver'
-import { getVpnProfile, rotateVpnProfile } from '../services/apiUserService'
+import { saveAs } from 'file-saver';
+import { getVpnProfile, rotateVpnProfile } from '../services/apiUserService';
+import { useToast } from 'vue-toastification';
 
 export default {
   props: {
@@ -56,155 +98,173 @@ export default {
       required: true
     }
   },
+  setup() {
+    const toast = useToast();
+    return { toast };
+  },
   data() {
     return {
       downloading: false,
       rotating: false
-    }
+    };
   },
   methods: {
     async downloadVpn() {
-      this.downloading = true
+      this.downloading = true;
       try {
-        // call the API to get (or create) the profile
-        const resp = await getVpnProfile(this.detail.user_id)
+        const resp = await getVpnProfile(this.detail.user_id);
         const blob = new Blob([resp.data], {
           type: 'application/x-openvpn-profile'
-        })
-        saveAs(blob, `${this.detail.user_id}.ovpn`)
+        });
+        saveAs(blob, `${this.detail.user_id}.ovpn`);
+        this.toast.success('VPN profile downloaded successfully');
       } catch (e) {
-        console.error('Failed to download VPN profile', e)
-        this.$notify({
-          type: 'error',
-          title: 'Error',
-          text: 'Could not download VPN profile.'
-        })
+        console.error('Failed to download VPN profile', e);
+        this.toast.error('Failed to download VPN profile');
       } finally {
-        this.downloading = false
+        this.downloading = false;
       }
     },
     async rotateVpn() {
-      this.rotating = true
+      this.rotating = true;
       try {
-        // call the API to revoke + re-create the profile
-        const resp = await rotateVpnProfile(this.detail.user_id)
+        const resp = await rotateVpnProfile(this.detail.user_id);
         const blob = new Blob([resp.data], {
           type: 'application/x-openvpn-profile'
-        })
-        saveAs(blob, `${this.detail.user_id}.ovpn`)
+        });
+        saveAs(blob, `${this.detail.user_id}.ovpn`);
+        this.toast.success('VPN profile rotated and downloaded successfully');
       } catch (e) {
-        console.error('Failed to rotate VPN profile', e)
-        this.$notify({
-          type: 'error',
-          title: 'Error',
-          text: 'Could not rotate VPN profile.'
-        })
+        console.error('Failed to rotate VPN profile', e);
+        this.toast.error('Failed to rotate VPN profile');
       } finally {
-        this.rotating = false
+        this.rotating = false;
       }
     }
   }
-}
+};
 </script>
 
 <style scoped>
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(10, 10, 10, 0.8);
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2xl);
+}
+
+.modal-header h3 {
+  font-size: 1.5rem;
+  color: var(--color-text-primary);
+}
+
+.close-btn {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  cursor: pointer;
+  transition: all var(--transition-fast);
 }
 
-.modal-box {
-  background: #1e1e2f;
-  padding: 2em;
-  border-radius: 10px;
-  width: 90%;
-  max-width: 500px;
-  color: #f5f5f5;
-  box-shadow: 0 0 25px #ff3d3d40;
-  font-family: 'Share Tech Mono', monospace;
-}
-
-.modal-title {
-  font-size: 1.4rem;
-  margin-bottom: 1.5em;
-  color: #ff3d3d;
+.close-btn:hover {
+  background: var(--color-error);
+  border-color: var(--color-error);
+  color: white;
 }
 
 .detail-grid {
+  display: grid;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-2xl);
+  padding-bottom: var(--space-2xl);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-item {
   display: flex;
   flex-direction: column;
-  gap: 1em;
+  gap: var(--space-sm);
 }
 
-.detail-row {
+.detail-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-value {
+  font-size: 0.9375rem;
+  color: var(--color-text-primary);
+}
+
+.detail-value code,
+code.detail-value {
+  font-family: var(--font-mono);
+  padding: 0.5rem;
+  background: var(--color-bg-elevated);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  display: block;
+  word-break: break-all;
+}
+
+.ip-address {
+  color: var(--color-primary) !important;
+}
+
+.vpn-section {
+  margin-bottom: var(--space-2xl);
+}
+
+.vpn-section h4 {
+  font-size: 1.125rem;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-xs);
+}
+
+.vpn-hint {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-lg);
+}
+
+.vpn-actions {
   display: flex;
-  justify-content: space-between;
-  border-bottom: 1px solid #ff3d3d30;
-  padding-bottom: 0.5em;
-}
-
-.label {
-  font-weight: bold;
-  color: #ff3d3d;
-}
-
-.value {
-  color: #f5f5f5;
-}
-
-.running {
-  color: #00ff00;
-}
-
-.stopped {
-  color: #ff3d3d;
-}
-
-.actions {
-  margin-top: 2em;
-  text-align: right;
-  display: flex;
-  gap: 0.5em;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: var(--space-md);
 }
 
-.btn-vpn {
-  background-color: #0066cc;
-  color: #fff;
-  border: none;
-  padding: 0.5em 1em;
-  border-radius: 6px;
-  cursor: pointer;
+.vpn-actions button {
+  flex: 1;
+  min-width: 200px;
 }
 
-.btn-vpn[disabled] {
-  opacity: 0.6;
+.vpn-actions button:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-.btn-vpn:hover:not([disabled]) {
-  box-shadow: 0 0 10px #0066cc80;
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
-.btn-close {
-  background-color: #ff3d3d;
-  color: #fff;
-  border: none;
-  padding: 0.5em 1.2em;
-  border-radius: 6px;
-  cursor: pointer;
+.modal-footer button {
+  min-width: 120px;
 }
 
-.btn-close:hover {
-  box-shadow: 0 0 10px #ff3d3d80;
+@media (max-width: 768px) {
+  .vpn-actions button {
+    min-width: 100%;
+  }
 }
 </style>

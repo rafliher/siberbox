@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="app-layout">
     <Navbar />
     <main class="main-content">
       <slot />
@@ -14,8 +14,17 @@ export default {
 };
 </script>
 
-<style>
+<style scoped>
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+
 .main-content {
-  padding: 2em;
+  flex: 1;
+  width: 100%;
 }
 </style>
