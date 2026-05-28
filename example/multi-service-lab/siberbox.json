@@ -1,0 +1,13 @@
+{
+  "services": {
+    "web": {
+      "hostname": "web.target"
+    },
+    "db": {
+      "hostname": "db.target"
+    },
+    "admin-panel": {
+      "hostname": "admin.target"
+    }
+  }
+}

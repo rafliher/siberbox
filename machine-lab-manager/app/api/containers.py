@@ -1,8 +1,13 @@
 # app/api/containers.py
 import uuid
 import base64
+import json
 import datetime
-from pydantic import BaseModel,IPvAnyAddress
+import zipfile
+import io
+import yaml
+from pydantic import BaseModel, IPvAnyAddress
+from typing import Optional
 
 from fastapi import (
     APIRouter,
@@ -22,10 +27,9 @@ from app.models import (
     HostStatus,
     Container,
     ContainerStatus,
+    ContainerService,
     VPNProfile,
 )
-
-from app.api.hosts import Healthiness, compute_healthiness
 
 from app.internal.vpn import (
     create_or_get_profile,
@@ -37,13 +41,21 @@ from app.internal.vpn import (
 router = APIRouter(
     prefix="/containers",
     tags=["containers"],
-    dependencies=[Depends(get_current_admin)],  # admin-only
+    dependencies=[Depends(get_current_admin)],
 )
 
+
+# ─── Response Models ─────────────────────────────────────────────────
+
+class ServiceInfo(BaseModel):
+    service_name: str
+    hostname: Optional[str] = None
+    vpn_ip: str
 
 class ContainerLaunchResponse(BaseModel):
     id: str
     host_id: uuid.UUID
+    services: list[ServiceInfo]
 
 class ContainerInfoResponse(BaseModel):
     id: str
@@ -51,114 +63,170 @@ class ContainerInfoResponse(BaseModel):
     user_id: str
     created_at: datetime.datetime
     name: str
-    image: str
     status: str
-    ip_address: IPvAnyAddress   # ← new field
+    services: list[ServiceInfo]
+
+
+# ─── Helpers ─────────────────────────────────────────────────────────
+
+def _parse_siberbox_manifest(zip_data: bytes) -> dict:
+    """
+    Extract siberbox.json from the ZIP if it exists.
+
+    siberbox.json format:
+    {
+        "services": {
+            "web": { "hostname": "web.lab" },
+            "db":  { "hostname": "db.lab" },
+            "vpn": { "hostname": "attacker.lab" }
+        }
+    }
+
+    If no siberbox.json, falls back to reading docker-compose.yml
+    and exposing all services (except internal ones).
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
+            # Try siberbox.json first
+            for name in z.namelist():
+                if name.endswith("siberbox.json"):
+                    return json.loads(z.read(name))
+
+            # Fallback: parse docker-compose.yml to discover services
+            for name in z.namelist():
+                if name.endswith(("docker-compose.yml", "docker-compose.yaml")):
+                    compose = yaml.safe_load(z.read(name))
+                    services = {}
+                    for svc_name in compose.get("services", {}):
+                        services[svc_name] = {"hostname": f"{svc_name}.lab"}
+                    return {"services": services}
+    except Exception:
+        pass
+
+    return {"services": {}}
+
+
+# ─── Launch ──────────────────────────────────────────────────────────
 
 @router.post(
     "/launch",
     response_model=ContainerLaunchResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Launch containerized environment",
-    description="Upload and launch a Docker Compose environment for a user with automatic VPN integration."
+    description=(
+        "Upload a Docker Compose environment with multi-service VPN support. "
+        "Each service gets its own VPN IP and optional DNS hostname. "
+        "Include a siberbox.json in the ZIP to control which services are exposed."
+    ),
 )
 async def launch_container(
     user_id: uuid.UUID,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Launch a containerized environment for a user.
-    
-    This endpoint:
-    1. Accepts a ZIP file containing Docker Compose configuration
-    2. Selects an available container host with sufficient resources
-    3. Creates or retrieves a VPN profile for the user
-    4. Deploys the environment on the selected host
-    5. Sets up VPN routing for secure access
-    
-    The ZIP file should contain:
-    - docker-compose.yml or docker-compose.yaml
-    - Any additional files referenced in the compose file
-    - Optional Dockerfile(s) for custom images
-    """
-    # 1) Read & base64-encode the ZIP
+    # 1) Read ZIP and parse manifest
     data = await file.read()
     encoded_zip = base64.b64encode(data).decode()
+    manifest = _parse_siberbox_manifest(data)
+    exposed_services = manifest.get("services", {})
+
+    if not exposed_services:
+        raise HTTPException(
+            status_code=400,
+            detail="No services found. Include siberbox.json or docker-compose.yml in the ZIP.",
+        )
 
     # 2) Pick a healthy host with capacity
     stmt = select(ContainerHost).where(
         ContainerHost.status != HostStatus.offline,
         ContainerHost.cpu_percent < 90,
         ContainerHost.mem_percent < 90,
-        ContainerHost.current_containers < ContainerHost.max_containers
+        ContainerHost.current_containers < ContainerHost.max_containers,
     ).order_by(ContainerHost.current_containers)
     host = (await db.execute(stmt)).scalar_one_or_none()
     if not host:
         raise HTTPException(status_code=503, detail="No available host")
 
-    # 3) Create or fetch the user's VPN profile, catching any errors
+    # 3) Create/fetch user's VPN profile
     try:
-        user_ovpn_path = await create_or_get_profile(db, str(user_id))
+        await create_or_get_profile(db, str(user_id))
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create VPN profile for user {user_id}: {e}"
-        )
+        raise HTTPException(status_code=500, detail=f"User VPN profile failed: {e}")
 
-    # 4) Load the VPNProfile record so we know the assigned IP
     stmt = select(VPNProfile).where(
         VPNProfile.client_name == str(user_id),
-        VPNProfile.revoked == False
+        VPNProfile.revoked == False,
     )
     user_prof = (await db.execute(stmt)).scalar_one_or_none()
     if not user_prof:
         raise HTTPException(status_code=500, detail="User VPN profile missing")
 
-    # 5) Pre-generate a container ID & create its VPN profile, again catching errors
+    # 4) Generate container ID
     container_id = str(uuid.uuid4())
-    try:
-        cont_ovpn_path = await create_or_get_profile(db, container_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create VPN profile for container {container_id}: {e}"
+
+    # 5) Create VPN profile for EACH exposed service
+    service_vpn_configs = {}  # service_name -> {ip, ovpn_base64, profile_id}
+    dns_entries = {}  # hostname -> vpn_ip
+
+    for svc_name, svc_conf in exposed_services.items():
+        profile_name = f"{container_id}-{svc_name}"
+        try:
+            ovpn_path = await create_or_get_profile(db, profile_name)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"VPN profile for service '{svc_name}' failed: {e}",
+            )
+
+        stmt = select(VPNProfile).where(
+            VPNProfile.client_name == profile_name,
+            VPNProfile.revoked == False,
         )
+        svc_prof = (await db.execute(stmt)).scalar_one_or_none()
+        if not svc_prof:
+            raise HTTPException(status_code=500, detail=f"VPN profile missing for {svc_name}")
 
-    stmt = select(VPNProfile).where(
-        VPNProfile.client_name == container_id,
-        VPNProfile.revoked == False
-    )
-    cont_prof = (await db.execute(stmt)).scalar_one_or_none()
-    if not cont_prof:
-        raise HTTPException(status_code=500, detail="Container VPN profile missing")
+        with open(ovpn_path, "rb") as f:
+            ovpn_b64 = base64.b64encode(f.read()).decode()
 
-    with open(cont_ovpn_path, "rb") as f:
-        encoded_vpn_container = base64.b64encode(f.read()).decode()
+        service_vpn_configs[svc_name] = {
+            "ip": str(svc_prof.ip_address),
+            "ovpn_base64": ovpn_b64,
+            "profile_id": svc_prof.id,
+        }
 
-    # 6) Tell the host agent to start the container
+        hostname = svc_conf.get("hostname", f"{svc_name}.lab")
+        dns_entries[hostname] = str(svc_prof.ip_address)
+
+    # 6) Send to host agent
     agent_url = f"http://{host.ip}:{host.api_port}/agent/containers"
     payload = {
         "name": container_id,
         "docker_zip_base64": encoded_zip,
-        "vpn_conf_base64": encoded_vpn_container,
+        "services": {
+            svc_name: {
+                "vpn_conf_base64": conf["ovpn_base64"],
+                "hostname": list(dns_entries.keys())[i],
+            }
+            for i, (svc_name, conf) in enumerate(service_vpn_configs.items())
+        },
+        "dns_entries": dns_entries,
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             agent_url,
             json=payload,
             headers={"X-Server-Key": host.cred_ref},
-            timeout=600.0,  # 10 minutes for container building
+            timeout=600.0,
         )
 
     if resp.status_code != status.HTTP_201_CREATED:
-        text = resp.text
         raise HTTPException(
             status_code=resp.status_code,
-            detail=f"Agent failed to launch container: {text}"
+            detail=f"Agent failed: {resp.text}",
         )
 
-    # 7) Persist in our DB
+    # 7) Persist container + services in DB
     container = Container(
         id=container_id,
         user_id=user_id,
@@ -168,44 +236,61 @@ async def launch_container(
         created_at=datetime.datetime.utcnow(),
     )
     db.add(container)
+
+    service_infos = []
+    for svc_name, conf in service_vpn_configs.items():
+        hostname = next(
+            (h for h, ip in dns_entries.items() if ip == conf["ip"]), None
+        )
+        svc = ContainerService(
+            container_id=container_id,
+            service_name=svc_name,
+            hostname=hostname,
+            vpn_ip=conf["ip"],
+            vpn_profile_id=conf["profile_id"],
+        )
+        db.add(svc)
+        service_infos.append(ServiceInfo(
+            service_name=svc_name,
+            hostname=hostname,
+            vpn_ip=conf["ip"],
+        ))
+
     host.current_containers += 1
     await db.commit()
 
-    # 8) Allow only user↔container over tun0
-    apply_vpn_rule(user_prof.ip_address, cont_prof.ip_address)
+    # 8) Apply iptables rules: user ↔ each service
+    for conf in service_vpn_configs.values():
+        apply_vpn_rule(user_prof.ip_address, conf["ip"])
 
-    return ContainerLaunchResponse(id=container_id, host_id=host.id)
+    return ContainerLaunchResponse(
+        id=container_id,
+        host_id=host.id,
+        services=service_infos,
+    )
+
+
+# ─── Restart ─────────────────────────────────────────────────────────
 
 @router.post(
     "/{container_id}/restart",
     status_code=status.HTTP_200_OK,
     summary="Restart container",
-    description="Restart an existing container environment."
 )
 async def restart_container(
     container_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Restart a container environment.
-    
-    This sends a restart command to the container host where the
-    container is running. The container will be stopped and started again.
-    """
-    # 1) Lookup the container record
     stmt = select(Container).where(Container.id == container_id)
     cont = (await db.execute(stmt)).scalar_one_or_none()
     if not cont:
         raise HTTPException(status_code=404, detail="Container not found")
 
-    # 2) Find its host
     host = await db.get(ContainerHost, cont.host_id)
     if not host:
         raise HTTPException(status_code=500, detail="Host missing")
 
-    # 3) Forward to the host agent
-    agent_url = (f"http://{host.ip}:{host.api_port}"
-                 f"/agent/containers/{cont.name}/restart")
+    agent_url = f"http://{host.ip}:{host.api_port}/agent/containers/{cont.name}/restart"
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             agent_url,
@@ -215,47 +300,35 @@ async def restart_container(
     if resp.status_code != 200:
         raise HTTPException(
             status_code=resp.status_code,
-            detail=f"Agent restart failed: {resp.json()}"
+            detail=f"Agent restart failed: {resp.text}",
         )
 
-    # 4) Update status
     cont.status = ContainerStatus.running
     await db.commit()
     return {"detail": "Container restarted successfully"}
 
 
+# ─── Stop & Remove ───────────────────────────────────────────────────
+
 @router.delete(
     "/{container_id}",
     status_code=status.HTTP_200_OK,
     summary="Stop and remove container",
-    description="Stop, remove, and clean up a container environment along with its VPN access."
 )
 async def stop_container(
     container_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Stop and completely remove a container environment.
-    
-    This operation:
-    1. Stops and removes the container from the host
-    2. Removes VPN routing rules
-    3. Revokes the container's VPN profile
-    4. Updates host capacity counters
-    5. Removes the container record from the database
-    """
-    # 1) Lookup the container record
     stmt = select(Container).where(Container.id == container_id)
     cont = (await db.execute(stmt)).scalar_one_or_none()
     if not cont:
         raise HTTPException(status_code=404, detail="Container not found")
 
-    # 2) Find its host
     host = await db.get(ContainerHost, cont.host_id)
     if not host:
         raise HTTPException(status_code=500, detail="Host missing")
 
-    # 3) Tell the host agent to remove it
+    # Tell agent to remove
     agent_url = f"http://{host.ip}:{host.api_port}/agent/containers/{cont.name}"
     async with httpx.AsyncClient() as client:
         resp = await client.delete(
@@ -266,24 +339,31 @@ async def stop_container(
     if resp.status_code not in (200, 202, 204, 404):
         raise HTTPException(
             status_code=resp.status_code,
-            detail=f"Agent delete failed: {resp.json()}"
+            detail=f"Agent delete failed: {resp.text}",
         )
 
-    # 4) Tear down VPN routing and profile
-    await remove_vpn_profile(db, cont.id)
+    # Remove VPN profiles for all services
+    svcs = (await db.execute(
+        select(ContainerService).where(ContainerService.container_id == container_id)
+    )).scalars().all()
+    for svc in svcs:
+        profile_name = f"{container_id}-{svc.service_name}"
+        await remove_vpn_profile(db, profile_name)
 
-    # 5) Update DB
+    # Remove container record (cascades to container_services)
     await db.delete(cont)
     host.current_containers = max(0, host.current_containers - 1)
     await db.commit()
     return {"detail": "Container stopped and removed successfully"}
 
 
+# ─── Inspect ─────────────────────────────────────────────────────────
+
 @router.get(
     "/{container_id}",
     response_model=ContainerInfoResponse,
     status_code=status.HTTP_200_OK,
-    summary="Inspect a container’s status"
+    summary="Inspect container status and services",
 )
 async def inspect_container(
     container_id: str,
@@ -294,66 +374,59 @@ async def inspect_container(
     if not cont:
         raise HTTPException(status_code=404, detail="Container not found")
 
+    # Get services
+    svcs = (await db.execute(
+        select(ContainerService).where(ContainerService.container_id == container_id)
+    )).scalars().all()
+
+    # Get live status from agent
     host = await db.get(ContainerHost, cont.host_id)
-    if not host:
-        raise HTTPException(status_code=500, detail="Host missing")
-
-    agent_url = f"http://{host.ip}:{host.api_port}/agent/containers"
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            agent_url,
-            headers={"X-Server-Key": host.cred_ref},
-            timeout=10.0,
-        )
-    live = resp.json()
-    
-    info = next((c for c in live if cont.name in c["name"] ), None)
-    if not info:
-        raise HTTPException(status_code=404, detail="Container not running")
-
-    vpn_stmt = select(VPNProfile).where(
-        VPNProfile.client_name == container_id,
-        VPNProfile.revoked == False
-    )
-    vpn_prof = (await db.execute(vpn_stmt)).scalar_one_or_none()
-    if not vpn_prof:
-        raise HTTPException(status_code=500, detail="VPN profile missing")
+    agent_status = "unknown"
+    if host:
+        try:
+            agent_url = f"http://{host.ip}:{host.api_port}/agent/containers"
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    agent_url,
+                    headers={"X-Server-Key": host.cred_ref},
+                    timeout=10.0,
+                )
+            live = resp.json()
+            info = next((c for c in live if cont.name in c["name"]), None)
+            if info:
+                agent_status = info.get("status", "unknown")
+        except Exception:
+            agent_status = "unreachable"
 
     return ContainerInfoResponse(
         id=container_id,
         host_id=str(cont.host_id),
         user_id=str(cont.user_id),
         created_at=cont.created_at,
-        name=info["name"],
-        image=info.get("image", ""),
-        status=info.get("status", ""),
-        ip_address=vpn_prof.ip_address
+        name=cont.name,
+        status=agent_status,
+        services=[
+            ServiceInfo(
+                service_name=s.service_name,
+                hostname=s.hostname,
+                vpn_ip=str(s.vpn_ip),
+            )
+            for s in svcs
+        ],
     )
 
 
+# ─── List All ────────────────────────────────────────────────────────
+
 @router.get(
     "/",
-    # response_model=list[ContainerInfoResponse],
     status_code=status.HTTP_200_OK,
     summary="List all containers",
-    description="Retrieve a list of all containers managed by the platform."
 )
 async def list_all_containers(
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get a list of all containers in the system.
-    
-    Returns basic information about each container including:
-    - Container ID and name
-    - Associated user ID
-    - Host assignment
-    - Creation timestamp
-    - Current status
-    """
-    # 1) Fetch all Container records
     stmt = select(Container)
     result = await db.execute(stmt)
     containers = result.scalars().all()
-    
     return containers

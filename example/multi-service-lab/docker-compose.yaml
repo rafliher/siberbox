@@ -1,0 +1,30 @@
+version: '3.8'
+
+# Example: Multi-service lab with 3 targets
+# User connects via VPN, each service gets its own IP + DNS hostname
+# web.target -> web app (port 80)
+# db.target  -> database (port 3306)
+# admin.target -> admin panel (port 8080)
+
+services:
+  web:
+    image: nginx:alpine
+    networks:
+      - lab_internal
+
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: vulnerable_password
+      MYSQL_DATABASE: app
+    networks:
+      - lab_internal
+
+  admin-panel:
+    image: nginx:alpine
+    networks:
+      - lab_internal
+
+networks:
+  lab_internal:
+    driver: bridge
