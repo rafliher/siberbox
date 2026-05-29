@@ -93,30 +93,26 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
             f"openvpn --config /vpn/{svc_name}.ovpn --dev tun{i} --daemon vpn-{svc_name}"
         )
 
-    entrypoint = textwrap.dedent(f"""\
-        #!/bin/sh
-        set -e
-
-        # Create tun devices
-        mkdir -p /dev/net
-        [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200
-
-        # Start dnsmasq
-        dnsmasq --conf-file=/vpn/dnsmasq.conf --no-daemon --log-queries &
-
-        # Start OpenVPN clients
-        {chr(10).join(ovpn_cmds)}
-
-        # Wait for VPN tunnels to come up
-        sleep 5
-
-        # Enable forwarding
-        echo 1 > /proc/sys/net/ipv4/ip_forward
-
-        # Keep running
-        echo "Gateway ready with {len(svc_names)} VPN tunnels + DNS"
-        tail -f /dev/null
-    """)
+    lines = [
+        "#!/bin/sh",
+        "set -e",
+        "",
+        "mkdir -p /dev/net",
+        "[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200",
+        "",
+        "dnsmasq --conf-file=/vpn/dnsmasq.conf --no-daemon --log-queries &",
+        "",
+    ]
+    lines.extend(ovpn_cmds)
+    lines.extend([
+        "",
+        "sleep 5",
+        "echo 1 > /proc/sys/net/ipv4/ip_forward",
+        "",
+        f'echo "Gateway ready with {len(svc_names)} VPN tunnels + DNS"',
+        "tail -f /dev/null",
+    ])
+    entrypoint = "\n".join(lines) + "\n"
 
     entrypoint_path = os.path.join(vpn_dir, "gateway.sh")
     with open(entrypoint_path, "w") as f:
@@ -124,13 +120,16 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
     os.chmod(entrypoint_path, 0o755)
 
     # Write gateway Dockerfile
-    dockerfile = textwrap.dedent("""\
-        FROM alpine:3.19
-        RUN apk add --no-cache openvpn dnsmasq iptables
-        COPY gateway.sh /gateway.sh
-        RUN chmod +x /gateway.sh
-        ENTRYPOINT ["/gateway.sh"]
-    """)
+    # Copy all VPN configs and dnsmasq.conf into the image so no volume mount needed
+    dockerfile = "FROM alpine:3.19\n"
+    dockerfile += "RUN apk add --no-cache openvpn dnsmasq iptables\n"
+    dockerfile += "RUN mkdir -p /vpn\n"
+    dockerfile += "COPY gateway.sh /gateway.sh\n"
+    dockerfile += "COPY dnsmasq.conf /vpn/dnsmasq.conf\n"
+    for svc_name in services:
+        dockerfile += f"COPY {svc_name}.ovpn /vpn/{svc_name}.ovpn\n"
+    dockerfile += "RUN chmod +x /gateway.sh\n"
+    dockerfile += 'ENTRYPOINT ["/gateway.sh"]\n'
     with open(os.path.join(vpn_dir, "Dockerfile"), "w") as f:
         f.write(dockerfile)
 
@@ -155,11 +154,16 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
     compose["networks"]["siberbox_vpn"] = {"driver": "bridge"}
 
     # Add gateway service
-    dns_ip = "172.28.0.2"  # Fixed IP for DNS server
+    # Use a unique /24 subnet per lab based on container name hash to avoid collisions
+    import hashlib
+    subnet_hash = int(hashlib.md5(work_dir.encode()).hexdigest()[:2], 16)
+    # Range: 172.30.{1-254}.0/24
+    subnet_third = max(1, min(254, subnet_hash))
+    dns_ip = f"172.30.{subnet_third}.2"
     compose["networks"]["siberbox_vpn"] = {
         "driver": "bridge",
         "ipam": {
-            "config": [{"subnet": "172.28.0.0/16"}],
+            "config": [{"subnet": f"172.30.{subnet_third}.0/24"}],
         },
     }
 
@@ -167,9 +171,6 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         "build": {"context": "./siberbox-vpn"},
         "cap_add": ["NET_ADMIN"],
         "devices": ["/dev/net/tun:/dev/net/tun"],
-        "volumes": [
-            "./siberbox-vpn:/vpn:ro",
-        ],
         "networks": {
             "siberbox_vpn": {"ipv4_address": dns_ip},
         },
