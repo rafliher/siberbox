@@ -329,6 +329,11 @@ def start_container(req: StartContainerReq):
     if req.services:
         # Multi-service mode: inject VPN gateway sidecar
         _inject_gateway(work_dir, req.services, req.dns_entries or {})
+        # Also write vpn.ovpn for backward compat (old labs COPY it in Dockerfile)
+        first_svc = list(req.services.values())[0]
+        vpn_path = os.path.join(work_dir, "vpn.ovpn")
+        with open(vpn_path, "wb") as f:
+            f.write(base64.b64decode(first_svc.vpn_conf_base64))
     elif req.vpn_conf_base64:
         # Legacy single-service mode: write vpn.ovpn as before
         vpn_path = os.path.join(work_dir, "vpn.ovpn")
