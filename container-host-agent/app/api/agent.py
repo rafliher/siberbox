@@ -86,7 +86,7 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         with open(counter_file, "w") as fd:
             fd.write("1")
     subnet_third = next_val
-    dns_ip = f"172.30.{subnet_third}.254"
+    dns_ip = f"172.31.{subnet_third}.254"
 
     # Write VPN configs for each service
     for svc_name, svc_conf in services.items():
@@ -244,7 +244,7 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
     compose["networks"]["siberbox_vpn"] = {
         "driver": "bridge",
         "ipam": {
-            "config": [{"subnet": f"172.30.{subnet_third}.0/24"}],
+            "config": [{"subnet": f"172.31.{subnet_third}.0/24"}],
         },
     }
 
