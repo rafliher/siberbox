@@ -68,6 +68,26 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
     vpn_dir = os.path.join(work_dir, "siberbox-vpn")
     os.makedirs(vpn_dir, exist_ok=True)
 
+    # Compute unique subnet early — needed for dnsmasq config and compose
+    import fcntl
+    counter_file = os.path.join(WORK_DIR, ".subnet_counter")
+    try:
+        fd = open(counter_file, "r+")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        val = int(fd.read().strip() or "0")
+        next_val = (val % 253) + 1
+        fd.seek(0)
+        fd.write(str(next_val))
+        fd.truncate()
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
+    except FileNotFoundError:
+        next_val = 1
+        with open(counter_file, "w") as fd:
+            fd.write("1")
+    subnet_third = next_val
+    dns_ip = f"172.30.{subnet_third}.254"
+
     # Write VPN configs for each service
     for svc_name, svc_conf in services.items():
         ovpn_path = os.path.join(vpn_dir, f"{svc_name}.ovpn")
@@ -220,26 +240,7 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         compose["networks"] = {}
     compose["networks"]["siberbox_vpn"] = {"driver": "bridge"}
 
-    # Add gateway service with unique /24 subnet per lab
-    # Use atomic counter file to guarantee no collisions across concurrent labs
-    import fcntl
-    counter_file = os.path.join(WORK_DIR, ".subnet_counter")
-    try:
-        fd = open(counter_file, "r+")
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        val = int(fd.read().strip() or "0")
-        next_val = (val % 253) + 1  # 1-253, wraps around
-        fd.seek(0)
-        fd.write(str(next_val))
-        fd.truncate()
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
-    except FileNotFoundError:
-        next_val = 1
-        with open(counter_file, "w") as fd:
-            fd.write("1")
-    subnet_third = next_val
-    dns_ip = f"172.30.{subnet_third}.254"
+    # Gateway subnet (dns_ip and subnet_third computed at top of function)
     compose["networks"]["siberbox_vpn"] = {
         "driver": "bridge",
         "ipam": {
@@ -275,8 +276,8 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         else:
             svc_conf["networks"]["siberbox_vpn"] = {}
 
-        # Point DNS to gateway
-        svc_conf["dns"] = [dns_ip]
+        # Point DNS to gateway — use both gateway bridge IP and 8.8.8.8 fallback
+        svc_conf["dns"] = [dns_ip, "8.8.8.8"]
 
         # Remove VPN-related caps from original services (gateway handles it)
         if "cap_add" in svc_conf:
