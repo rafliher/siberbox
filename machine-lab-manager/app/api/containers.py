@@ -37,6 +37,7 @@ from app.internal.vpn import (
     remove_vpn_rule,
     remove_vpn_profile,
     add_iroute_to_ccd,
+    push_dns_to_ccd,
 )
 
 router = APIRouter(
@@ -275,6 +276,10 @@ async def launch_container(
     # 8) Apply iptables rules: user ↔ each service
     for conf in service_vpn_configs.values():
         apply_vpn_rule(user_prof.ip_address, conf["ip"])
+
+    # 9) Push DNS to user — gateway's primary IP serves dnsmasq
+    primary_ip = svc_list[0][1]["ip"]
+    push_dns_to_ccd(str(user_id), primary_ip)
 
     return ContainerLaunchResponse(
         id=container_id,

@@ -100,6 +100,15 @@ def _make_client_sync(name: str, ip: str) -> str:
     return out_path
 
 
+def push_dns_to_ccd(client_name: str, dns_ip: str):
+    """Push DNS server to a user's CCD so their VPN client uses lab DNS."""
+    ccd_path = os.path.join(CCD_DIR, client_name)
+    if not os.path.exists(ccd_path):
+        return
+    with open(ccd_path, "a") as ccd:
+        ccd.write(f'push "dhcp-option DNS {dns_ip}"\n')
+
+
 def add_iroute_to_ccd(client_name: str, extra_ip: str):
     """
     Add an iroute directive to a client's CCD file so the OpenVPN server

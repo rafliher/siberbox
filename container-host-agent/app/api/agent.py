@@ -74,11 +74,10 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         with open(ovpn_path, "wb") as f:
             f.write(base64.b64decode(svc_conf.vpn_conf_base64))
 
-    # Write DNS config for dnsmasq
-    dnsmasq_conf = ""
+    # Write DNS config for dnsmasq — listen on all interfaces including tun0
+    dnsmasq_conf = "listen-address=0.0.0.0\n"
     for hostname, ip in (dns_entries or {}).items():
         dnsmasq_conf += f"address=/{hostname}/{ip}\n"
-    # Also resolve .lab TLD
     dnsmasq_conf += "server=8.8.8.8\n"
 
     with open(os.path.join(vpn_dir, "dnsmasq.conf"), "w") as f:
