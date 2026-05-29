@@ -277,9 +277,8 @@ async def launch_container(
     for conf in service_vpn_configs.values():
         apply_vpn_rule(user_prof.ip_address, conf["ip"])
 
-    # 9) Push DNS to user — gateway's primary IP serves dnsmasq
-    primary_ip = svc_list[0][1]["ip"]
-    push_dns_to_ccd(str(user_id), primary_ip)
+    # Note: DNS push removed — it breaks user's internet DNS on macOS.
+    # Users access services by IP or use explicit: nslookup target.lab <gateway_ip>
 
     return ContainerLaunchResponse(
         id=container_id,

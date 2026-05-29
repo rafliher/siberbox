@@ -220,12 +220,25 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         compose["networks"] = {}
     compose["networks"]["siberbox_vpn"] = {"driver": "bridge"}
 
-    # Add gateway service
-    # Use a unique /24 subnet per lab based on container name hash to avoid collisions
-    import hashlib
-    subnet_hash = int(hashlib.md5(work_dir.encode()).hexdigest()[:2], 16)
-    # Range: 172.30.{1-254}.0/24
-    subnet_third = max(1, min(254, subnet_hash))
+    # Add gateway service with unique /24 subnet per lab
+    # Use atomic counter file to guarantee no collisions across concurrent labs
+    import fcntl
+    counter_file = os.path.join(WORK_DIR, ".subnet_counter")
+    try:
+        fd = open(counter_file, "r+")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        val = int(fd.read().strip() or "0")
+        next_val = (val % 253) + 1  # 1-253, wraps around
+        fd.seek(0)
+        fd.write(str(next_val))
+        fd.truncate()
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
+    except FileNotFoundError:
+        next_val = 1
+        with open(counter_file, "w") as fd:
+            fd.write("1")
+    subnet_third = next_val
     dns_ip = f"172.30.{subnet_third}.254"
     compose["networks"]["siberbox_vpn"] = {
         "driver": "bridge",
