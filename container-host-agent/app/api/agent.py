@@ -286,6 +286,47 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         yaml.dump(compose, f, default_flow_style=False, sort_keys=False)
 
 
+# ─── Resource limits ─────────────────────────────────────────────────
+# Cap each lab service's memory/CPU so a single lab can never exhaust the
+# host (the platform shares this box). DB services get a bit more headroom.
+_DB_HINTS = ("mysql", "maria", "postgres", "postgre", "mongo", "redis", "db")
+
+
+def _apply_resource_limits(compose: dict):
+    for name, conf in (compose.get("services") or {}).items():
+        if not isinstance(conf, dict):
+            continue
+        low = name.lower()
+        if name == "siberbox-gateway":
+            mem = "96m"
+        elif any(h in low for h in _DB_HINTS):
+            mem = "448m"
+        else:
+            mem = "256m"
+        conf["mem_limit"] = mem
+        conf["cpus"] = 1.0
+        # leave memswap_limit unset -> Docker allows up to mem of swap as a
+        # spike buffer (host has swap), instead of hard OOM-killing on a blip.
+
+
+def _set_compose_limits(work_dir: str):
+    """Load the (already VPN-injected) compose, cap resources, write back."""
+    import yaml
+    cp = None
+    for name in ("docker-compose.yml", "docker-compose.yaml"):
+        p = os.path.join(work_dir, name)
+        if os.path.exists(p):
+            cp = p
+            break
+    if not cp:
+        return
+    with open(cp) as f:
+        compose = yaml.safe_load(f) or {}
+    _apply_resource_limits(compose)
+    with open(cp, "w") as f:
+        yaml.dump(compose, f, default_flow_style=False, sort_keys=False)
+
+
 # ─── List containers ─────────────────────────────────────────────────
 
 @router.get("/containers", response_model=list[ContainerInfo])
@@ -339,6 +380,9 @@ def start_container(req: StartContainerReq):
         vpn_path = os.path.join(work_dir, "vpn.ovpn")
         with open(vpn_path, "wb") as f:
             f.write(base64.b64decode(req.vpn_conf_base64))
+
+    # Cap per-service memory/CPU so one lab can't exhaust the shared host
+    _set_compose_limits(work_dir)
 
     # Launch
     try:
