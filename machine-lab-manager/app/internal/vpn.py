@@ -100,6 +100,19 @@ def _make_client_sync(name: str, ip: str) -> str:
     return out_path
 
 
+def add_iroute_to_ccd(client_name: str, extra_ip: str):
+    """
+    Add an iroute directive to a client's CCD file so the OpenVPN server
+    routes traffic for extra_ip through this client's tunnel.
+    Used for multi-service labs where one gateway handles multiple VPN IPs.
+    """
+    ccd_path = os.path.join(CCD_DIR, client_name)
+    if not os.path.exists(ccd_path):
+        return
+    with open(ccd_path, "a") as ccd:
+        ccd.write(f"iroute {extra_ip} 255.255.255.255\n")
+
+
 async def create_or_get_profile(db: AsyncSession, user_id: str) -> str:
     """
     1) Check for existing non-revoked profile.

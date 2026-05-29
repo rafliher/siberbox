@@ -36,6 +36,7 @@ from app.internal.vpn import (
     apply_vpn_rule,
     remove_vpn_rule,
     remove_vpn_profile,
+    add_iroute_to_ccd,
 )
 
 router = APIRouter(
@@ -197,6 +198,18 @@ async def launch_container(
 
         hostname = svc_conf.get("hostname", f"{svc_name}.lab")
         dns_entries[hostname] = str(svc_prof.ip_address)
+
+    # 5b) Add iroutes: the primary (first) service's CCD gets iroutes for all others
+    # This tells OpenVPN server to route secondary IPs through the primary client tunnel
+    svc_list = list(service_vpn_configs.items())
+    if len(svc_list) > 1:
+        primary_profile_name = f"{container_id}-{svc_list[0][0]}"
+        for _, conf in svc_list[1:]:
+            add_iroute_to_ccd(primary_profile_name, conf["ip"])
+
+    # Also need a server-side route for each secondary IP
+    # OpenVPN needs `route` in server.conf OR iroute in CCD
+    # iroute in CCD tells OpenVPN to route that IP through this client
 
     # 6) Send to host agent
     agent_url = f"http://{host.ip}:{host.api_port}/agent/containers"

@@ -65,10 +65,10 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
     - dnsmasq for DNS resolution of hostnames to VPN IPs
     Each original service routes its traffic through the gateway.
     """
-    # Write VPN configs for each service
     vpn_dir = os.path.join(work_dir, "siberbox-vpn")
     os.makedirs(vpn_dir, exist_ok=True)
 
+    # Write VPN configs for each service
     for svc_name, svc_conf in services.items():
         ovpn_path = os.path.join(vpn_dir, f"{svc_name}.ovpn")
         with open(ovpn_path, "wb") as f:
@@ -86,30 +86,82 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
 
     # Write gateway entrypoint script
     svc_names = list(services.keys())
-    ovpn_cmds = []
+    # Use first service's VPN profile as the primary connection
+    # Add other service IPs as secondary addresses on the same tun0
+    primary_svc = svc_names[0]
+    secondary_svcs = svc_names[1:]
+
+    # Build iptables DNAT rules: forward VPN traffic to internal Docker service IPs
+    # The gateway gets VPN IPs on tun devices but services listen on the Docker bridge.
+    # We DNAT incoming traffic on each tun to the corresponding service's Docker IP.
+    nat_rules = []
     for i, svc_name in enumerate(svc_names):
-        # Each VPN client uses a different tun device
-        ovpn_cmds.append(
-            f"openvpn --config /vpn/{svc_name}.ovpn --dev tun{i} --daemon vpn-{svc_name}"
+        # Traffic arriving on tun{i} destined for this gateway → forward to Docker service
+        # The Docker service name resolves to its bridge IP via Docker DNS
+        nat_rules.append(
+            f"# Forward tun{i} traffic to {svc_name} Docker service"
+        )
+        nat_rules.append(
+            f"iptables -t nat -A PREROUTING -i tun{i} -j DNAT --to-destination $({svc_name}_IP)"
+        )
+        nat_rules.append(
+            f"iptables -t nat -A POSTROUTING -o eth0 -d $({svc_name}_IP) -j MASQUERADE"
         )
 
     lines = [
         "#!/bin/sh",
-        "set -e",
         "",
         "mkdir -p /dev/net",
         "[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200",
         "",
+        "echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true",
+        "",
         "dnsmasq --conf-file=/vpn/dnsmasq.conf --no-daemon --log-queries &",
         "",
+        f"# Primary VPN: {primary_svc}",
+        f"openvpn --config /vpn/{primary_svc}.ovpn --dev tun0 --daemon vpn-primary",
+        "",
+        "sleep 8",
+        "",
     ]
-    lines.extend(ovpn_cmds)
+
+    # Add secondary IPs from other service profiles onto tun0
+    for svc_name in secondary_svcs:
+        ip = dns_entries.get(
+            next((h for h, v in dns_entries.items() if services[svc_name].hostname == h), ""),
+            ""
+        )
+    # Actually we need the VPN IPs, not hostnames. Get them from dnsmasq.conf.
+
+    # Simpler: parse the IPs from the ovpn CCD (they're assigned by the server)
+    # But we don't know them in the gateway script. We DO know them from dns_entries.
+    # dns_entries maps hostname → vpn_ip. services maps svc_name → hostname.
+    for svc_name in secondary_svcs:
+        hostname = services[svc_name].hostname or f"{svc_name}.lab"
+        vpn_ip = dns_entries.get(hostname, "")
+        if vpn_ip:
+            lines.append(f"# Add secondary IP for {svc_name} ({vpn_ip})")
+            lines.append(f"ip addr add {vpn_ip}/24 dev tun0 2>/dev/null || true")
+            lines.append("")
+
+    lines.append("# Set up NAT: forward VPN traffic to Docker services")
+
+    for svc_name in svc_names:
+        safe_name = svc_name.replace("-", "_")
+        hostname = services[svc_name].hostname or f"{svc_name}.lab"
+        vpn_ip = dns_entries.get(hostname, "")
+        lines.extend([
+            f'{safe_name}_IP=$(getent hosts {svc_name} | awk \'{{print $1}}\')',
+            f'echo "Service {svc_name} ({vpn_ip}) -> ${safe_name}_IP"',
+            f'if [ -n "${safe_name}_IP" ] && [ -n "{vpn_ip}" ]; then',
+            f'  iptables -t nat -A PREROUTING -d {vpn_ip} -j DNAT --to-destination ${safe_name}_IP',
+            f'  iptables -t nat -A POSTROUTING -d ${safe_name}_IP -j MASQUERADE',
+            "fi",
+            "",
+        ])
+
     lines.extend([
-        "",
-        "sleep 5",
-        "echo 1 > /proc/sys/net/ipv4/ip_forward",
-        "",
-        f'echo "Gateway ready with {len(svc_names)} VPN tunnels + DNS"',
+        f'echo "Gateway ready with {len(svc_names)} VPN tunnels + DNS + NAT"',
         "tail -f /dev/null",
     ])
     entrypoint = "\n".join(lines) + "\n"
@@ -159,7 +211,7 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
     subnet_hash = int(hashlib.md5(work_dir.encode()).hexdigest()[:2], 16)
     # Range: 172.30.{1-254}.0/24
     subnet_third = max(1, min(254, subnet_hash))
-    dns_ip = f"172.30.{subnet_third}.2"
+    dns_ip = f"172.30.{subnet_third}.254"
     compose["networks"]["siberbox_vpn"] = {
         "driver": "bridge",
         "ipam": {
@@ -171,9 +223,11 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         "build": {"context": "./siberbox-vpn"},
         "cap_add": ["NET_ADMIN"],
         "devices": ["/dev/net/tun:/dev/net/tun"],
+        "sysctls": ["net.ipv4.ip_forward=1"],
         "networks": {
             "siberbox_vpn": {"ipv4_address": dns_ip},
         },
+        "extra_hosts": ["host.docker.internal:host-gateway"],
         "restart": "unless-stopped",
     }
 
