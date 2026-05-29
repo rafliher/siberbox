@@ -74,8 +74,14 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         with open(ovpn_path, "wb") as f:
             f.write(base64.b64decode(svc_conf.vpn_conf_base64))
 
-    # Write DNS config for dnsmasq — listen on all interfaces including tun0
-    dnsmasq_conf = "listen-address=0.0.0.0\n"
+    # Write DNS config for dnsmasq
+    # Bind to bridge IP + all VPN IPs. Avoid 127.0.0.1 (Docker DNS DNAT conflict).
+    vpn_ips = list(dns_entries.values()) if dns_entries else []
+    listen_addrs = [dns_ip] + vpn_ips
+    dnsmasq_conf = "bind-interfaces\n"
+    dnsmasq_conf += "no-resolv\n"
+    for addr in listen_addrs:
+        dnsmasq_conf += f"listen-address={addr}\n"
     for hostname, ip in (dns_entries or {}).items():
         dnsmasq_conf += f"address=/{hostname}/{ip}\n"
     dnsmasq_conf += "server=8.8.8.8\n"
@@ -115,11 +121,10 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         "",
         "echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true",
         "",
-        "dnsmasq --conf-file=/vpn/dnsmasq.conf --no-daemon --log-queries &",
-        "",
         f"# Primary VPN: {primary_svc}",
         f"openvpn --config /vpn/{primary_svc}.ovpn --dev tun0 --daemon vpn-primary",
         "",
+        "# Wait for VPN tunnel",
         "sleep 8",
         "",
     ]
@@ -143,8 +148,15 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
             lines.append(f"ip addr add {vpn_ip}/24 dev tun0 2>/dev/null || true")
             lines.append("")
 
-    lines.append("# Set up NAT: forward VPN traffic to Docker services")
+    # Exclude DNS (port 53) from DNAT so dnsmasq handles it locally
+    lines.append("# DNS exceptions — keep port 53 local for dnsmasq")
+    all_vpn_ips = list(dns_entries.values()) if dns_entries else []
+    for vip in all_vpn_ips:
+        lines.append(f"iptables -t nat -A PREROUTING -d {vip} -p udp --dport 53 -j ACCEPT")
+        lines.append(f"iptables -t nat -A PREROUTING -d {vip} -p tcp --dport 53 -j ACCEPT")
+    lines.append("")
 
+    lines.append("# NAT: forward VPN traffic to Docker services")
     for svc_name in svc_names:
         safe_name = svc_name.replace("-", "_")
         hostname = services[svc_name].hostname or f"{svc_name}.lab"
@@ -160,6 +172,10 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         ])
 
     lines.extend([
+        "",
+        "# Start dnsmasq AFTER tun0 is up (binds to VPN IPs)",
+        "dnsmasq --conf-file=/vpn/dnsmasq.conf --log-queries &",
+        "",
         f'echo "Gateway ready with {len(svc_names)} VPN tunnels + DNS + NAT"',
         "tail -f /dev/null",
     ])
