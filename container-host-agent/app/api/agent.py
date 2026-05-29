@@ -139,7 +139,7 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         "mkdir -p /dev/net",
         "[ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200",
         "",
-        "echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true",
+        "# ip_forward enabled via docker compose sysctls",
         "",
         f"# Primary VPN: {primary_svc}",
         f"openvpn --config /vpn/{primary_svc}.ovpn --dev tun0 --daemon vpn-primary",
