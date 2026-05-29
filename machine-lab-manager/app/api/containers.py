@@ -65,7 +65,9 @@ class ContainerInfoResponse(BaseModel):
     user_id: str
     created_at: datetime.datetime
     name: str
+    image: str = ""              # legacy compat
     status: str
+    ip_address: Optional[str] = None  # legacy compat (first service VPN IP)
     services: list[ServiceInfo]
 
 
@@ -399,6 +401,7 @@ async def inspect_container(
     # Get live status from agent
     host = await db.get(ContainerHost, cont.host_id)
     agent_status = "unknown"
+    info = None
     if host:
         try:
             agent_url = f"http://{host.ip}:{host.api_port}/agent/containers"
@@ -415,21 +418,25 @@ async def inspect_container(
         except Exception:
             agent_status = "unreachable"
 
+    svc_infos = [
+        ServiceInfo(
+            service_name=s.service_name,
+            hostname=s.hostname,
+            vpn_ip=str(s.vpn_ip),
+        )
+        for s in svcs
+    ]
+
     return ContainerInfoResponse(
         id=container_id,
         host_id=str(cont.host_id),
         user_id=str(cont.user_id),
         created_at=cont.created_at,
         name=cont.name,
+        image=info.get("image", "") if info else "",
         status=agent_status,
-        services=[
-            ServiceInfo(
-                service_name=s.service_name,
-                hostname=s.hostname,
-                vpn_ip=str(s.vpn_ip),
-            )
-            for s in svcs
-        ],
+        ip_address=svc_infos[0].vpn_ip if svc_infos else None,
+        services=svc_infos,
     )
 
 
