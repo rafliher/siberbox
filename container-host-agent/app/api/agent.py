@@ -279,15 +279,7 @@ def _inject_gateway(work_dir: str, services: dict, dns_entries: dict):
         # Point DNS to gateway — use both gateway bridge IP and 8.8.8.8 fallback
         svc_conf["dns"] = [dns_ip, "8.8.8.8"]
 
-        # Remove VPN-related caps from original services (gateway handles it)
-        if "cap_add" in svc_conf:
-            svc_conf["cap_add"] = [c for c in svc_conf["cap_add"] if c != "NET_ADMIN"]
-            if not svc_conf["cap_add"]:
-                del svc_conf["cap_add"]
-        if "devices" in svc_conf:
-            svc_conf["devices"] = [d for d in svc_conf["devices"] if "tun" not in str(d)]
-            if not svc_conf["devices"]:
-                del svc_conf["devices"]
+        # Keep original service caps/devices intact — old labs use them for their own VPN/entrypoint
 
     # Write modified compose
     with open(compose_path, "w") as f:
