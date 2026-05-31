@@ -9,6 +9,7 @@ from pathlib import Path
 from ipaddress import IPv4Network
 import asyncio
 import uuid
+from ipaddress import IPv4Address
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -21,8 +22,10 @@ PKI_DIR = os.path.join(EASYRSA_DIR, "pki")
 OVPN_DIR = "/etc/openvpn/pki/ovpns"
 CCD_DIR = "/etc/openvpn/ccd"
 
-VPN_SUBNET = os.getenv("VPN_INTERNAL_SUBNET", "10.8.0.0/24")
+VPN_SUBNET = os.getenv("VPN_INTERNAL_SUBNET", "10.8.0.0/22")
 NETWORK = IPv4Network(VPN_SUBNET)
+# .1 is reserved as the OpenVPN server's tun0 gateway address.
+RESERVED_IPS = {NETWORK.network_address, NETWORK.network_address + 1, NETWORK.broadcast_address}
 
 
 def _run_sync(cmd: list[str]) -> None:
@@ -138,17 +141,20 @@ async def create_or_get_profile(db: AsyncSession, user_id: str) -> str:
     if prof:
         return prof.config_path
 
-    # 2) Allocate next IP (only consider non-revoked profiles)
+    # 2) Allocate next IP (works for any subnet size). Walk the full host range
+    #    and pick the lowest IP not held by a live (non-revoked) profile.
     existing_ips = (await db.execute(
         select(VPNProfile.ip_address).where(VPNProfile.revoked == False)
     )).scalars().all()
-    used_octets = {int(str(ip).split(".")[-1]) for ip in existing_ips if ip is not None}
-    for octet in range(2, NETWORK.num_addresses - 1):
-        if octet not in used_octets:
-            ip = f"{NETWORK.network_address.exploded.rsplit('.', 1)[0]}.{octet}"
-            break
-    else:
-        raise RuntimeError("No free IP in VPN subnet")
+    used = {IPv4Address(str(ip)) for ip in existing_ips if ip is not None}
+    ip = None
+    for candidate in NETWORK.hosts():
+        if candidate in RESERVED_IPS or candidate in used:
+            continue
+        ip = str(candidate)
+        break
+    if ip is None:
+        raise RuntimeError(f"No free IP in VPN subnet {NETWORK}")
 
     # 3) Offload cleanup & generation to threadpool
     await asyncio.to_thread(_cleanup_artifacts_sync, user_id)

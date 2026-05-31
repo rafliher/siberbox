@@ -133,9 +133,65 @@ async def reap_stale_containers():
         await asyncio.sleep(INTERVAL_SEC)
 
 
+async def reap_orphan_vpn_profiles():
+    """Revoke VPN profiles that look like container-service profiles whose
+    Container row no longer exists.
+
+    Container-service profiles have client_name = `<container_id>-<svc>`.
+    User profiles have client_name = `<user_uuid>` (no dash + svc suffix on
+    the matching Container pattern). When a delete failed mid-way in the
+    past, the Container row was removed but the per-service VPNProfile was
+    left non-revoked, leaking VPN IPs forever.
+    """
+    from app.models import Container, VPNProfile
+    from app.internal.vpn import remove_vpn_profile
+
+    INTERVAL_SEC = int(os.getenv("MANAGER_VPN_REAPER_INTERVAL_SEC", "600"))  # 10min
+    logger.info(f"[vpn-reaper] started: every {INTERVAL_SEC}s")
+
+    while True:
+        try:
+            async with SessionLocal() as session:
+                # All live container IDs, as strings, for prefix matching.
+                live_ids = {
+                    str(c.id) for c in (
+                        await session.execute(select(Container))
+                    ).scalars().all()
+                }
+                # All non-revoked profiles.
+                profiles = (
+                    await session.execute(
+                        select(VPNProfile).where(VPNProfile.revoked == False)
+                    )
+                ).scalars().all()
+                for p in profiles:
+                    name = str(p.client_name)
+                    # Service profile pattern: <UUID>-<svc>. Split off final segment
+                    # and check the prefix matches a known container.
+                    if "-" not in name:
+                        continue
+                    prefix = name.rsplit("-", 1)[0]
+                    # A UUID has 4 dashes — make sure we're not chopping inside one
+                    # by requiring the prefix to look like a UUID (5 hex groups).
+                    if prefix.count("-") != 4:
+                        continue
+                    if prefix in live_ids:
+                        continue
+                    # Orphan: revoke + cleanup.
+                    print(f"[vpn-reaper] revoking orphan profile {name} (ip={p.ip_address})", flush=True)
+                    try:
+                        await remove_vpn_profile(session, name)
+                    except Exception as e:
+                        logger.error(f"[vpn-reaper] failed to revoke {name}: {e}")
+        except Exception as e:
+            logger.error(f"[vpn-reaper] sweep error: {e}")
+        await asyncio.sleep(INTERVAL_SEC)
+
+
 async def startup():
     await init_models()
     await create_default_admin()
     asyncio.create_task(monitor_offline_hosts())
     asyncio.create_task(reap_stale_containers())
+    asyncio.create_task(reap_orphan_vpn_profiles())
     await restore_vpn_rules()
