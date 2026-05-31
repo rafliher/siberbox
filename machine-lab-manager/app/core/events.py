@@ -53,7 +53,31 @@ async def monitor_offline_hosts():
             await session.commit()
         await asyncio.sleep(THRESHOLD)
 
+async def restore_vpn_rules():
+    """Re-apply per-user/lab ACCEPT pairs on startup (iptables are reset when manager container restarts)."""
+    from sqlalchemy.future import select
+    from app.core.database import SessionLocal
+    from app.models import Container, ContainerStatus, VPNProfile, ContainerService
+    from app.internal.vpn import apply_vpn_rule
+    async with SessionLocal() as session:
+        result = await session.execute(select(Container).where(Container.status == ContainerStatus.running))
+        for c in result.scalars().all():
+            ures = await session.execute(
+                select(VPNProfile).where(VPNProfile.client_name == str(c.user_id), VPNProfile.revoked == False)
+            )
+            uprof = ures.scalar_one_or_none()
+            if not uprof:
+                continue
+            sres = await session.execute(select(ContainerService).where(ContainerService.container_id == c.id))
+            for s in sres.scalars().all():
+                try:
+                    apply_vpn_rule(str(uprof.ip_address), str(s.vpn_ip))
+                except Exception as e:
+                    print(f"[restore_vpn_rules] {c.id} {s.vpn_ip}: {e}")
+
+
 async def startup():
     await init_models()
     await create_default_admin()
     asyncio.create_task(monitor_offline_hosts())
+    await restore_vpn_rules()

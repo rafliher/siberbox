@@ -56,9 +56,11 @@ EOF
   chown nobody:nogroup "$CCD_DIR"
   chmod 744 "$CCD_DIR"
 
-  iptables -I FORWARD -i tun0 -o tun0 -j DROP
 
   echo "OpenVPN PKI initialized."
 else
   echo "OpenVPN PKI already exists, skipping init."
 fi
+
+## ensure DROP at end of FORWARD (runs every container start; ACCEPT pairs added by manager match first)
+iptables -C FORWARD -i tun0 -o tun0 -j DROP 2>/dev/null || iptables -A FORWARD -i tun0 -o tun0 -j DROP
