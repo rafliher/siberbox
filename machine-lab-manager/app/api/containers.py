@@ -343,15 +343,14 @@ async def restart_container(
 
 # ─── Stop & Remove ───────────────────────────────────────────────────
 
-@router.delete(
-    "/{container_id}",
-    status_code=status.HTTP_200_OK,
-    summary="Stop and remove container",
-)
-async def stop_container(
-    container_id: str,
-    db: AsyncSession = Depends(get_db),
-):
+async def stop_and_remove_container(container_id: str, db: AsyncSession) -> None:
+    """Tear down a lab container: ask the host-agent to remove the docker-compose
+    project, revoke the per-service VPN profiles, and drop the Container row.
+
+    Shared by the HTTP DELETE route and the background stale-container reaper.
+    Raises HTTPException on hard failures so the HTTP path returns a proper
+    status; the reaper catches and logs.
+    """
     stmt = select(Container).where(Container.id == container_id)
     cont = (await db.execute(stmt)).scalar_one_or_none()
     if not cont:
@@ -361,7 +360,6 @@ async def stop_container(
     if not host:
         raise HTTPException(status_code=500, detail="Host missing")
 
-    # Tell agent to remove
     agent_url = f"http://{host.ip}:{host.api_port}/agent/containers/{cont.name}"
     async with httpx.AsyncClient() as client:
         resp = await client.delete(
@@ -375,7 +373,6 @@ async def stop_container(
             detail=f"Agent delete failed: {resp.text}",
         )
 
-    # Remove VPN profiles for all services
     svcs = (await db.execute(
         select(ContainerService).where(ContainerService.container_id == container_id)
     )).scalars().all()
@@ -383,10 +380,21 @@ async def stop_container(
         profile_name = f"{container_id}-{svc.service_name}"
         await remove_vpn_profile(db, profile_name)
 
-    # Remove container record (cascades to container_services)
     await db.delete(cont)
     host.current_containers = max(0, host.current_containers - 1)
     await db.commit()
+
+
+@router.delete(
+    "/{container_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Stop and remove container",
+)
+async def stop_container(
+    container_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    await stop_and_remove_container(container_id, db)
     return {"detail": "Container stopped and removed successfully"}
 
 

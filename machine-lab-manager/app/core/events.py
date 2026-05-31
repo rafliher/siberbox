@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -8,6 +10,8 @@ from app.core.security import hash_password
 from app.core.config import get_settings
 import datetime
 from datetime import timezone
+
+logger = logging.getLogger(__name__)
 
 async def init_models():
     async with engine.begin() as conn:
@@ -76,8 +80,62 @@ async def restore_vpn_rules():
                     print(f"[restore_vpn_rules] {c.id} {s.vpn_ip}: {e}")
 
 
+async def reap_stale_containers():
+    """Periodically stop lab containers that have outlived the safety threshold.
+
+    Akademi's own scheduler (`utils/machineLabScheduler.js`) handles the normal
+    case: it sees an instance row, sees `scheduledShutdownAt` elapsed, calls
+    our DELETE. This loop is the backstop for orphans the akademi scheduler
+    can't see — e.g. a launch where the akademi row was deleted before our
+    DELETE ran, leaving us with a `containers` row + a live Docker project +
+    consumed VPN IPs.
+
+    Source of truth: this manager's own `containers` table. Only acts on rows
+    we created. Never touches Docker objects we don't track.
+    """
+    from app.api.containers import stop_and_remove_container
+    from app.models import Container, ContainerStatus
+
+    MAX_LIFETIME_MIN = int(os.getenv("MANAGER_REAPER_MAX_LIFETIME_MIN", "360"))  # 6h
+    INTERVAL_SEC = int(os.getenv("MANAGER_REAPER_INTERVAL_SEC", "300"))  # 5min
+    logger.info(
+        f"[reaper] started: lifetime>{MAX_LIFETIME_MIN}min, every {INTERVAL_SEC}s"
+    )
+
+    while True:
+        try:
+            threshold = datetime.datetime.now(timezone.utc) - datetime.timedelta(
+                minutes=MAX_LIFETIME_MIN
+            )
+            async with SessionLocal() as session:
+                stmt = select(Container).where(
+                    Container.status == ContainerStatus.running,
+                    Container.created_at < threshold,
+                )
+                stale = (await session.execute(stmt)).scalars().all()
+                for c in stale:
+                    age_min = int(
+                        (
+                            datetime.datetime.now(timezone.utc) - c.created_at
+                        ).total_seconds()
+                        / 60
+                    )
+                    logger.warning(
+                        f"[reaper] stopping stale container {c.id} (age={age_min}min)"
+                    )
+                    try:
+                        await stop_and_remove_container(c.id, session)
+                        logger.info(f"[reaper] reaped {c.id}")
+                    except Exception as e:
+                        logger.error(f"[reaper] failed to reap {c.id}: {e}")
+        except Exception as e:
+            logger.error(f"[reaper] sweep error: {e}")
+        await asyncio.sleep(INTERVAL_SEC)
+
+
 async def startup():
     await init_models()
     await create_default_admin()
     asyncio.create_task(monitor_offline_hosts())
+    asyncio.create_task(reap_stale_containers())
     await restore_vpn_rules()
