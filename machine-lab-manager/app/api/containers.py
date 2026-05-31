@@ -3,9 +3,12 @@ import uuid
 import base64
 import json
 import datetime
+import logging
 import zipfile
 import io
 import yaml
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, IPvAnyAddress
 from typing import Optional
 
@@ -39,6 +42,7 @@ from app.internal.vpn import (
     add_iroute_to_ccd,
     push_dns_to_ccd,
 )
+from app.internal.openvpn_mgmt import kick_client
 
 router = APIRouter(
     prefix="/containers",
@@ -203,12 +207,22 @@ async def launch_container(
         dns_entries[hostname] = str(svc_prof.ip_address)
 
     # 5b) Add iroutes: the primary (first) service's CCD gets iroutes for all others
-    # This tells OpenVPN server to route secondary IPs through the primary client tunnel
+    # This tells OpenVPN server to route secondary IPs through the primary client tunnel.
+    # Then kick the primary client so OpenVPN re-reads its CCD with the new iroutes
+    # (CCD is only consulted at client-connect time).
     svc_list = list(service_vpn_configs.items())
     if len(svc_list) > 1:
         primary_profile_name = f"{container_id}-{svc_list[0][0]}"
         for _, conf in svc_list[1:]:
             add_iroute_to_ccd(primary_profile_name, conf["ip"])
+        # The primary-service gateway tunnel hasn't connected yet at this point
+        # (the host-agent starts it after this POST returns). Kick is best-effort
+        # idempotent — succeeds whether the client is currently connected or not,
+        # and prevents stale-CCD races for repeat launches under the same name.
+        try:
+            await kick_client(primary_profile_name)
+        except Exception as e:
+            logger.warning("openvpn kick %s failed: %s", primary_profile_name, e)
 
     # Also need a server-side route for each secondary IP
     # OpenVPN needs `route` in server.conf OR iroute in CCD

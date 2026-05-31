@@ -44,6 +44,10 @@ server 10.8.0.0 255.255.255.0
 
 client-config-dir /etc/openvpn/ccd
 
+# Loopback-only management interface so the siberbox manager can kick clients
+# after CCD changes (e.g. iroute additions for multi-service labs).
+management 127.0.0.1 7505
+
 keepalive 10 120
 persist-key
 persist-tun
@@ -64,3 +68,9 @@ fi
 
 ## ensure DROP at end of FORWARD (runs every container start; ACCEPT pairs added by manager match first)
 iptables -C FORWARD -i tun0 -o tun0 -j DROP 2>/dev/null || iptables -A FORWARD -i tun0 -o tun0 -j DROP
+
+## ensure management interface is enabled on existing deployments (idempotent)
+if [ -f /etc/openvpn/server.conf ] && ! grep -q '^management ' /etc/openvpn/server.conf; then
+  echo 'management 127.0.0.1 7505' >> /etc/openvpn/server.conf
+  echo "appended management directive to existing server.conf"
+fi
